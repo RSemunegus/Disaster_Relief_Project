@@ -1,0 +1,1596 @@
+---
+title: "Project-1_Semunegus_Robel"
+output: 
+  html_document: 
+  toc: true
+  toc_float: true
+
+---
+
+Name: Robel Semunegus (rzs5yf)
+
+https://bookdown.org/yihui/rmarkdown/html-document.html
+
+# Introduction 
+
+The objective of this project is to use the provided data set in order to predict the locations of blue tarps within Haiti. These blue tarps indicate displaced persons who need to be rescued. The problem that the rescuers face is that there are different types of pixels/tarps as well as other types of environments (soil, vegetation, etc.) that are also a factor. The goal of this project is to determine a model that is best suited in determining the locations of the blue tarps to rescue as many people as possible. Our objective will be to test out various models and determine the optimal model that will find the most blue tarps and, thus, displaced persons.
+
+Once the various models have been tuned, the models will then be predicted on a holdout data set to determine the level of performance that these models have. From this, the optimal model will be determined for predicting blue tarps.
+
+# Exploratory Data Analysis (Training Data)
+
+```{r, echo = TRUE}
+
+# Source: https://aberdeenstudygroup.github.io/studyGroup/lessons/SG-T5-RMarkdown/Intro_RMarkdown/#:~:text=is%20used%20to%20specify%20any,in%20the%20final%20rendered%20version.&text=This%20will%20prevent%20the%20code,to%20a%20different%20file%20format.
+
+data <- read.csv("HaitiPixels.csv", header=TRUE) # Load data into script
+data$Class <- as.factor(data$Class) # Change to a factor/categorical 
+attach(data) # Attach data to script
+
+summary(data) # Get summary statistics on data
+cor(data[,-1]) # Create a correlation matrix of all variables except Class
+pairs(data[,-1]) # Create a scatterplot matrix of all variables except Class
+
+
+# Create a plot with Class and the other quantitative variables
+par(mfrow = c(2,2))
+plot(Class, Red, main = "Class vs Red")
+plot(Class, Green, main = "Class vs Green")
+plot(Class, Blue, main = "Class vs Blue")
+
+# Histograms
+par(mfrow = c(1,3))
+hist(Red, main = "Red Histogram")
+hist(Green, main = "Green Histogram")
+hist(Blue, main = "Blue Histogram")
+
+
+```
+
+From the summary output, we see that three are four different variables in the data set - Class, Red, Green, and Blue. We see that Class is a qualitative variable and that Red, Green, and Blue are quantitative variables. From the output, we see that all the quantitative variables have the same max range of 255 but have different minimum and median values. Blue seems to have the smallest values within its range (but has the widest range) and Red seems to have the highest values in its range when compared to the other variables (see the mean and 3rd quantile). This makes sense because the RGB scale falls on the same range of values.
+
+From the correlation matrix, we see that all the predictors have a high correlation with each other. From the scatterplot matrix, this high correlation is verified by the linear relationship seen in the scatter plots. From the scatterplots, we see that there seems to be a linear relationship between Blue Tarps and both the Green and Red Tarps. We can also see that there is a linear relationship between Red and Green Tarps. These scatterplots line up with what we saw in our correlation matrix previously - there are strong linear relationships between the variables. 
+
+The Class variable was converted to a categorical variable and box plots were created between Class and the three other quantitative variables. We see that the different types of classes vary between each color indicating that we can use the colors to identify the type of class seen in an image. It provides some insight that the predictors provided may be useful to our objective. We can see in the Class vs Blue box plot that the blue tarp has high values compared to the other classes (as to be expected) but not as high values in the other colors. We see that for each color, there is a likely chance that the colors will be a good indicator of blue tarps.
+
+From the histograms, we can see the distribution of Red, Green, Blue in the data set. The histogram provides us a snapshot of where the values in those attributes lie and how often they occur. We see on the Red and Green histogram that the higher frequency values are at the ends of the histogram. For the Blue histogram, we see that the higher values seem to be on the left side and middle of the histogram.
+
+# Model Training
+
+## Set-up 
+
+```{r, echo = TRUE}
+
+blueTarps <- ifelse(Class == "Blue Tarp", 1, 0) # Create a binary variable where 1 indicates that the observation is a blue tarp and 0 if it is not
+blueTarps <- as.factor(blueTarps)
+data$blueTarps <- blueTarps # Add blue tarp column to data set
+
+```
+
+Prior to fitting the models, a binary variable was created to indicate the observations that were Blue Tarps. We create this binary variable due to the fact that our main objective is only to determine what is and is not a blue tarp. This means that it really doesn't matter what is in the "Not Blue Tarp" variable and we can use a binary response variable to differentiate between observations that are blue tarps and not blue tarps.
+
+## Method Approach - Part 1
+
+For our analysis, we will be fitting several different types of models in order to determine the optimal model and parameters that fits our model the best. The models that we will be looking at in Part 1 of this project are the following: Logistic Regression, Linear Discriminant Analysis (LDA), Quadratic Discriminant Analysis (QDA), K-Nearest Neighbors (KNN), and Ridge Regression. The overall objective of our analysis will be to perform 10-fold cross validation on each model, collect the attributes of each fold's confusion matrix & use those attributes to calculate our metrics of interest, and then determine, from the metrics, the optimal model and associated parameters. In Part 2, we will be doing the same approach as above but for Random Forest and the Support Vector Machine (SVM) models.
+
+To perform the analysis, as mentioned, 10-fold cross validation will be conducted (10 folds where each fold will serve as a test data at some point) and, for each fold, several metrics will be gathered. These metrics will then be summed together and divided by the number of folds to calculate the average value for each metric. The metrics that will be determined our the accuracy, precision, True Positive Rate (TPR), and False Positive Rate (FPR). To calculate these metrics, we will create a confusion matrix for each fold (and also summing up the values of the confusion matrix for each fold) and determine these metrics by looking at the features of the confusion matrix (i.e. True Positives, True Negatives, False Positives, and False Negatives). These attributes will be used as the inputs of the formulas for our metrics of interest. In addition, for each model, we will also want to take a look at the ROC curve and associated AUC value. 
+
+An optimal threshold will also have to be determined. With this threshold, we want to determine a value that helps identify the most blue tarps as possible while keeping resource constraints in mind. Also, tuning parameters will have to be identified as appropriate for each model (some models do not have tuning paramteers). These tuning parameters will be used to develop the most optimal model for each model.
+
+Overall, the objective will be to use 10-fold cross validation to produce reliable metrics and to compare these metrics between each model. From these metrics, we will then be able to determine which model is the most optimal to reflect our data set and provide us the best chance in finding blue tarps. 
+
+
+## Code Implementation Approach 
+
+For each model, we use Blue, Red, and Green Tarps as our predictor values without transformations or interaction effects. For the response variable, we use our previously created binary variable (Blue Tarp or not Blue Tarp).
+
+With the exception of Ridge Regression and SVM, we use a pretty similar implementation approach for each model to conduct our 10-fold Cross Validation. As mentioned previously, each observation in the data set is assigned a value 1 to 10 which represent the fold that it will be apart of. In this approach, each fold is looped through where one fold is assigned as the test data and the remaining 9 folds are the training data. We fit each model with the training data and then determine the probabilities and predictions associated with each fold. The code implementation to determine predictions and probabilties varied based on the model and the functions available to detremine probabilites. From the probabilities, we assign a certain threshold value to determine which predictions would be assigned a 1 (considered a Blue Tarp) or 0 (considered NOT a Blue Tarp). A confusion matrix is then developed to compare the predictions from our model with the actual results. The confusion matrix produces the TP, TN, FP, and FN values that can then be used as inputs into the formulas for our metrics of interest (accuracy, precision, TPR, and FPR - we also can determine the test error rate as well). Since we have 10 folds, we calculate an average value of these metrics for each model.
+
+For Ridge Regression, we still perform 10-fold Cross Validation but use the cv.glmnet() function for this model, with the associated optimal lambda. From this function, we can then determine the confusion matrix values and calculate our metrics. For SVM, we use the tune() function that allow us to perform cross validation while also taking into account various values for cost/gamma/delta to determine the model with the lowest CV error and, thus, optimal parameters.
+
+The implementation approach for the tuning parameters varied based on the model. For KNN, the optimal K-value will be determined by looking at KNN models with a K-value form 1 to 10 then determining the model with the highest K-value. For Ridge Regression, the optimal lambda is determined by the CV function and deriving the optimal lambda for that. For Random Forest, the tuning parameter is sqrt(# of parameters) since we be fitting a classification tree. For SVM, the cross validation function (tune()) will allow us to look at various values for cost/gamma/degree and find the parameters that are suitable for each kernel.
+
+For all models, the ROC curve was created and the associated AUC value was gathered as well by collecting the probabilities into a vector.
+
+One important item to note that, though implementation may be similar between models, the parameters and parameter values (tuning parameters, thresholds, value of K, etc.) may vary (or not exist) between each model. Later sections will describe these parameters, their selected values, and the approach to selecting these values. Also, note that each section may have some additional information on code implementation as well.
+
+# Cross-Validation
+
+## Logistic Regression
+
+```{r, echo = TRUE}
+
+log.result <- glm(blueTarps ~ Red + Blue + Green, data=data, family='binomial') # Create a logistic regression model with the binary variable as the response and using all the predictors
+summary(log.result)
+
+```
+
+Before we perform cross validation, we want to see the usefulness of the predictors in our model. We see from the summary output that all 3 predictors are significant. Because we see this significance, we want to move forward with this model to determine if it is an accurate model for our objective. If so, we have no need to look into more complex formulas (transformations, interactions, etc.). The reason is that if the predictors without interaction terms and transformations are significant then there is no reason to pursue a more complex model.
+
+
+```{r, echo = TRUE}
+
+# Load required libraries for code
+library(boot)
+library(pROC)
+library(glmnet)
+
+set.seed(1) # Set the seed in order to get same results 
+num.rows <- dim(data)[1] # Get number of rows in the data sets
+k <- 10 # Number of folds
+tenFold <- rep(seq(k), times = 1 + num.rows/k)[1:num.rows] # Set observations from 1 to 10 to prepapre for cross validation
+tenFold <- sample(tenFold) # Randomly assign numbers 1 to 10 for CV
+
+```
+
+In the code block above, we are setting up our cross validation effort by defining k as the number of folds needed for cross-validation (or CV) as well as determining the number assignment (1 to 10) for each observation to prepare for CV. Each observation is assigned a random number from 1 to 10 (since we are doing 10-fold cross validation), where each number indicates a set of observations that are cycled between training data 9 times and test data once. This code will allow us to loop through each fold and determine the appropriate metrics for each fold that will allow us to fill out our performance table. 
+
+
+## Cross Validation - Logistic Regression
+
+For the logistic regression model, the glm function was used (with the family parameter set to "binomial") for the logistic regression model.
+
+
+```{r, echo = TRUE}
+
+
+# Source: https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+set.seed(1)
+
+# Set metric values to 0
+log.accuracy <- 0
+tpr <- 0
+fpr <- 0
+log.precision <- 0
+log.auc <- 0
+
+log.fitted <- vector()
+blueTarps.roc <- vector()
+predTest <- vector()
+
+for (eachFold in 1:k) {
+  
+  train <- data[tenFold != eachFold, ]
+  test <- data[tenFold == eachFold, ]
+  blueTarps.train <- blueTarps[tenFold != eachFold]
+  blueTarps.test <- blueTarps[tenFold == eachFold]
+  blueTarps.roc <- append(blueTarps.roc, blueTarps.test)
+  
+  log.result <- glm(blueTarps ~ Red + Blue + Green, family='binomial', data = train) # Create a logistic regression   model with the binary variable as the response and using all the predictors  
+
+  # Set confusion matrix values to 0
+  tn <- 0 
+  fp <- 0
+  fn <- 0
+  tp <- 0
+  
+  # Gather the probabilities for each observation
+  # Create a vector to hold the predictions
+  # Determine the predictions based on the threshold value
+  log.result.probs <- predict(log.result, test, type='response')
+  log.result.preds <- rep(0, 6324)
+  log.result.preds[log.result.probs > .14] = 1
+  log.fitted <- append(log.fitted, log.result.probs)
+  predTest <- append(predTest, log.result.preds)
+    
+  tn <- table(log.result.preds, blueTarps.test)[1] # Grab all the True Negatives
+  fp <- table(log.result.preds, blueTarps.test)[2] # Grab all the False Positives
+  fn <- table(log.result.preds, blueTarps.test)[3] # Grab all the False Negatives
+  tp <- table(log.result.preds, blueTarps.test)[4] # Grab all the True Positives
+
+  # Accuracy for each fold
+  log.accuracy <- log.accuracy + ((tn+tp)/(tn+tp+fn+fp))
+  
+  # True Positive Rate for each fold
+  tpr <- tpr + (tp / (tp + fn))
+  
+  # False Positive Rate for each fold
+  fpr <- fpr + (fp / (fp + tn))
+  
+  # Precision for each fold
+  log.precision <- log.precision + (tp / (tp + fp))
+
+}
+
+```
+
+
+## Results - Logsitic Regression
+
+```{r, echo = TRUE}
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+theLogROC <- roc(blueTarps.roc, log.fitted, plot=TRUE, main = "Logistic Regression ROC Curve")
+log.auc <- theLogROC$auc
+log.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+log.accuracy <- log.accuracy / k
+log.accuracy
+
+# Average True Positive Rate (TPR)
+tpr <- tpr / k
+tpr
+
+# Average False Positive Rate (FPR)
+fpr <- fpr / k
+fpr
+
+# Average Precision 
+log.precision <- log.precision / k
+log.precision
+
+```
+
+From our CV earlier, we were able to create a confusion matrix for each fold and grab the TP, TN, FP, and FN for each fold. Using those totals, we used these values to calculate an average of the targeted metrics (AUC, TPR, FPR, Accuracy, and Precision) by finding the total value of these metrics from all 10 folds and then dividing by 10 (the number of folds/loops). From the metrics, we see that we get high value for our AUC, Accuracy, TPR, and Precision (though precision is around ~81% while the other previous metrics are above 95%) as well as an FPR under 1%. We also can see that the test error for this model is pretty low. From our results, we see that the logistic regression model fit the data well and performed well on our test data. 
+
+Looking at the ROC curve for the logistic regression, we know that our model does much better than random guessing and this is verified by the AUC value of .9985 for the logistic regression model. The ROC curve was built from out-of-sample data (i.e. test data) - we wanted to craft our ROC curve based on the confusion matrix that was developed from the test data. It does not do as us any good to create an ROC curve from in-sample (or training) data. The ROC curve is based on the True Negative Rate (TNR) on the x-axis and True Positive Rate (TPR) on the y-axis. To do this, the probabilities of each fold were collected and fed into the ROC function against the response values of the test data.
+
+
+# LDA
+
+## Cross Validation - LDA
+
+For the LDA regression model, the  MASS library was imported and used the lda() function to fit our model using LDA.
+
+```{r, echo = TRUE}
+
+# https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+
+library(MASS) # Load MASS library for LDA
+set.seed(1) # Set seed to get same results
+
+# Set metrics to 0
+lda.accuracy <- 0
+lda.tpr <- 0
+lda.fpr <- 0
+lda.precision <- 0
+lda.auc <- 0
+
+lda.fitted <- vector()
+blueTarps.lda.roc <- vector()
+
+# Conduct cross validation on the LDA model using the training data and testing on the test data from CV
+for(eachFold in 1:k) {
+  
+  # Set confusion matrix values to 0  - reset for each fold
+  lda.tn <- 0 
+  lda.fp <- 0
+  lda.fn <- 0
+  lda.tp <- 0
+
+  # Split the data into training and test
+  train <- data[tenFold != eachFold, ]
+  test <- data[tenFold == eachFold, ]
+  blueTarps.train <- blueTarps[tenFold != eachFold]
+  blueTarps.test <- blueTarps[tenFold == eachFold]
+  blueTarps.lda.roc <- append(blueTarps.lda.roc, blueTarps.test) # Add test response values to vector for each fold
+  
+  # Create the LDA model
+  lda.model <- lda(blueTarps ~ Red + Green + Blue, data = train)
+  
+  # Grab the predictions of the LDA model using the posterior probabilities 
+  lda.predict <- predict(lda.model, test)
+  lda.probs <- lda.predict$posterior[,2] # Gets the probability that the observations that are blue tarps
+  
+  lda.preds <- rep(0,nrow(test)) # Create vector with all 0s
+  lda.preds[lda.probs > .09] = 1 # Replace zeros in above vector with 1 if above .5
+  
+  lda.predict.class <- lda.predict$class # Get the classifications of the observations
+  
+  lda.fitted <- append(lda.fitted, lda.probs) # Add probabilities of each fold to vector
+  
+  # Grab the confusion matrix values for each fold
+  lda.tn <- lda.tn + table(lda.preds, blueTarps.test)[1] # Grab all the True Negatives
+  lda.fp <- lda.fp + table(lda.preds, blueTarps.test)[2] # Grab all the False Positives
+  lda.fn <- lda.fn + table(lda.preds, blueTarps.test)[3] # Grab all the False Negatives
+  lda.tp <- lda.tp + table(lda.preds, blueTarps.test)[4] # Grab all the True Positives
+
+  # Accuracy for each fold
+  lda.accuracy <- lda.accuracy + ((lda.tn+lda.tp)/(lda.tn + lda.tp + lda.fn + lda.fp))
+  
+  # True Positive Rate for each fold
+  lda.tpr <- lda.tpr + (lda.tp / (lda.tp + lda.fn))
+  
+  # False Positive Rate for each fold
+  lda.fpr <- lda.fpr + (lda.fp / (lda.fp + lda.tn))
+  
+  # Precision for each fold
+  lda.precision <- lda.precision + (lda.tp / (lda.tp + lda.fp))
+
+}
+
+
+```
+
+## Results - LDA
+
+```{r, echo = TRUE}
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+theLDAROC <- roc(blueTarps.lda.roc, lda.fitted, plot=TRUE, main = "LDA ROC Curve")
+lda.auc <- theLDAROC$auc
+lda.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+lda.accuracy <- lda.accuracy / k
+lda.accuracy
+
+# Average True Positive Rate (TPR)
+lda.tpr <- lda.tpr / k
+lda.tpr
+
+# Average False Positive Rate (FPR)
+lda.fpr <- lda.fpr / k
+lda.fpr
+
+# Average Precision 
+lda.precision <- lda.precision / k
+lda.precision
+
+```
+
+We see from these metrics that we get semi-decent results again though LDA did not seem to perform as well as logistic regression - there seems to be a substantial decrease in TPR and Precision in LDA as well as an FPR over 1%. We do however get a pretty low test error rate though not as low as logistic regression.
+
+From the ROC curve, we see that our model does much better than random guessing. We can verify this by looking at the AUC for the LDA ROC curve (.9889). We see that this is a slight decrease from the AUC value that we calculated for the logistic regression ROC curve. The ROC curve for the LDA regression model was determined from out-of-sample data (i.e. test data) since we are using our model to predict on the test data and to create our confusion matrix (which the ROC curve visually informs).
+
+
+# QDA
+
+## Cross Validation - QDA
+
+The fitting and cross validation of the QDA model was performed very similarly to the LDA model (same predictors, response, threshold, etc.). The main difference between the QDA model and LDA model was that the QDA function was used instead of the LDA function to fit the data to a more non-linear/flexible model from the MASS library.
+
+```{r, echo = TRUE}
+
+# https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+
+library(MASS) # Load MASS library for LDA
+set.seed(1) # Set seed to get same results
+
+# Set metrics to 0
+qda.accuracy <- 0
+qda.tpr <- 0
+qda.fpr <- 0
+qda.precision <- 0
+qda.auc <- 0
+
+qda.fitted <- vector()
+blueTarps.qda.roc <- vector()
+
+
+# Conduct cross validation on the QDA model using the training data and testing on the test data from CV
+for(eachFold in 1:k) {
+  
+  # Split the data into training and test
+  train <- data[tenFold != eachFold, ]
+  test <- data[tenFold == eachFold, ]
+  blueTarps.train <- blueTarps[tenFold != eachFold]
+  blueTarps.test <- blueTarps[tenFold == eachFold]
+  blueTarps.qda.roc <- append(blueTarps.qda.roc, blueTarps.test)
+  
+  # Set confusion matrix values to 0 for each fold
+  qda.tn <- 0 
+  qda.fp <- 0
+  qda.fn <- 0
+  qda.tp <- 0
+
+  # Create the QDA model
+  qda.model <- qda(blueTarps ~ Red + Green + Blue, data = train)
+  
+  # Grab the predictions of the QDA model using the posterior probabilities 
+  qda.predict <- predict(qda.model, test)
+  qda.probs <- qda.predict$posterior[,2] # Gets the probability that the observations that are blue tarps
+  
+  qda.preds <- rep(0,nrow(test)) # Create vector with all 0s
+  qda.preds[qda.probs > .10] = 1 # Replace zeros in above vector with 1 if above .5
+  
+  qda.fitted <- append(qda.fitted, qda.probs)
+  
+  # Grab the confusion matrix values for each fold
+  qda.tn <- table(qda.preds, blueTarps.test)[1] # Grab all the True Negatives
+  qda.fp <- table(qda.preds, blueTarps.test)[2] # Grab all the False Positives
+  qda.fn <- table(qda.preds, blueTarps.test)[3] # Grab all the False Negatives
+  qda.tp <- table(qda.preds, blueTarps.test)[4] # Grab all the True Positives
+ 
+  # Accuracy for each fold
+  qda.accuracy <- qda.accuracy + ((qda.tn+qda.tp)/(qda.tn + qda.tp + qda.fn + qda.fp))
+  
+  # True Positive Rate for each fold
+  qda.tpr <- qda.tpr + (qda.tp / (qda.tp + qda.fn))
+  
+  # False Positive Rate for each fold
+  qda.fpr <- qda.fpr + (qda.fp / (qda.fp + qda.tn))
+  
+  # Precision for each fold
+  qda.precision <- qda.precision + (qda.tp / (qda.tp + qda.fp))
+  
+}
+
+
+```
+
+
+## Results - QDA
+
+```{r, echo = TRUE}
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+theQDAROC <- roc(blueTarps.qda.roc, qda.fitted, plot=TRUE, main = "QDA ROC Curve")
+qda.auc <- theQDAROC$auc
+qda.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+qda.accuracy <- qda.accuracy / k
+qda.accuracy
+
+# Average True Positive Rate (TPR)
+qda.tpr <- qda.tpr / k
+qda.tpr
+
+# Average False Positive Rate (FPR)
+qda.fpr <- qda.fpr / k
+qda.fpr
+
+# Average Precision 
+qda.precision <- qda.precision / k
+qda.precision
+
+```
+
+Looking at the metrics for QDA, we that the QDA model performs pretty well. We see that QDA performs almost as well as logistic regression and has a noticeable improvement over LDA (though it has a slightly higher test error). It seems, though, that the data fits a quadratic boundary better than it fits a linear boundary (though the LDA model did perform relatively well). This seems to suggest that our data seems to have some non-linearity and requires a model with more flexibility than what LDA regression can offer. 
+
+From the ROC curve, again, we see that our model does better than random guessing. The AUC values verify this (.9982) and we see that this is slightly below the AUC of the logistic regression model and slightly higher than the LDA AUC value. The ROC curve was built from out-of-sample data.
+
+# KNN
+
+## Cross Validation - KNN
+
+```{r, echo = TRUE, cache=TRUE}
+
+knnFunction <- function(kValue, metric, roc) {
+  
+  library(class)
+  library(caret)
+  
+  set.seed(1)
+  
+  # Set metrics to 0
+  knn.accuracy <- 0
+  knn.tpr <- 0
+  knn.fpr <- 0
+  knn.precision <- 0
+  knn.auc <- 0
+  
+  # Create vectors to use for the ROC curve (probabilities and test response values)
+  knn.fitted <- vector()
+  blueTarps.knn.roc <- vector()
+  
+  for(eachFold in 1:k) {
+    
+    train <- data[tenFold != eachFold, ]
+    test <- data[tenFold == eachFold, ]
+    blueTarps.train <- blueTarps[tenFold != eachFold]
+    blueTarps.test <- blueTarps[tenFold == eachFold]
+    blueTarps.knn.roc <- append(blueTarps.knn.roc, blueTarps.test) # Add response values from test data from each    fold
+  
+    # Set confusion matrix values to 0 
+    knn.tn <- 0 
+    knn.fp <- 0
+    knn.fn <- 0
+    knn.tp <- 0
+  
+    # Grab the probabilities using the caret library
+    # Source: https://daviddalpiaz.github.io/stat432sp18/supp/knn_class_r.html
+    knn.model <- knn3(blueTarps~Red + Green + Blue, data = train, k = kValue)
+    knn.probs <- predict(knn.model, test, type='prob')[,2]
+    
+    knn.preds <- rep(0, nrow(test))
+    knn.preds[knn.probs > .59] = 1
+    
+    knn.fitted <- append(knn.fitted, knn.probs)
+                         
+    # Grab the predictions of the KNN model 
+    # knn.predict <- knn(train.predictors, test.predictors, blueTarps.train, k = 1)
+    
+    # Grab the confusion matrix values for each fold
+    knn.tn <- table(knn.preds, blueTarps.test)[1] # Grab all the True Negatives
+    knn.fp <- table(knn.preds, blueTarps.test)[2] # Grab all the False Positives
+    knn.fn <- table(knn.preds, blueTarps.test)[3] # Grab all the False Negatives
+    knn.tp <- table(knn.preds, blueTarps.test)[4] # Grab all the True Positives
+    
+    # Accuracy for each fold
+    knn.accuracy <- knn.accuracy + ((knn.tn+knn.tp)/(knn.tn + knn.tp + knn.fn + knn.fp))
+    
+    # True Positive Rate for each fold
+    knn.tpr <- knn.tpr + (knn.tp / (knn.tp + knn.fn))
+    
+    # False Positive Rate for each fold
+    knn.fpr <- knn.fpr + (knn.fp / (knn.fp + knn.tn))
+    
+    # Precision for each fold
+    knn.precision <- knn.precision + (knn.tp / (knn.tp + knn.fp))
+    
+  }
+  
+  if (roc == "Yes") {
+    theKNNROC <- roc(blueTarps.knn.roc, knn.fitted, plot=TRUE, main = "KNN ROC Curve")
+    knn.auc <- theKNNROC$auc
+  }
+  else if (roc == "No") {
+    theKNNROC <- roc(blueTarps.knn.roc, knn.fitted, plot=FALSE, main = "KNN ROC Curve")
+    knn.auc <- theKNNROC$auc
+  }
+  
+  # SOURCES
+  # https://swcarpentry.github.io/r-novice-inflammation/02-func-R/
+  # https://www.datamentor.io/r-programming/return-function/
+  
+  if (metric == "AUC") {
+    return(knn.auc)
+  }
+  else if (metric == "Accuracy") {
+    return(knn.accuracy/k)
+  }
+  else if (metric == "TPR") { 
+    return(knn.tpr/k)
+  }
+  else if (metric == "FPR") {
+    return(knn.fpr/k)
+  }
+  else if (metric == "Precision") {
+    return(knn.precision/k)
+  }
+  else if (metric == "Test Error") {
+    return(knn.te/k)
+  }
+  
+}
+
+```
+
+
+## Results - KNN
+
+```{r, cache = TRUE}
+
+
+knn.auc.1 <- knnFunction(1, "AUC", "No")
+knn.auc.2 <- knnFunction(2, "AUC", "No")
+knn.auc.3 <- knnFunction(3, "AUC", "No")
+knn.auc.4 <- knnFunction(4, "AUC", "No")
+knn.auc.5 <- knnFunction(5, "AUC", "No")
+knn.auc.6 <- knnFunction(6, "AUC", "No")
+knn.auc.7 <- knnFunction(7, "AUC", "No")
+knn.auc.8 <- knnFunction(8, "AUC", "No")
+knn.auc.9 <- knnFunction(9, "AUC", "No")
+knn.auc.10 <- knnFunction(10, "AUC", "No")
+
+
+```
+
+For KNN, we used the "caret" library in order to determine both the probabilities and predictions for the KNN model from our cross validation. A threshold of .59 was used (see Threshold Justification section) to compare the estimated probabilities of the test data. The knn3() function from the caret library was used to create the KNN model and to determine the probabilities (to be used for the ROC curve later). The probabilities collected were the probabilities associated with the percent chance that the observation was a blue tarp.
+
+To reduce the amount of code that was written, the KNN code was turned into a function with the only parameter being the value of K. This allows for different KNN models to be fitted with various values of K without having to repeat the code.
+
+Additionally, as can be seen, multiple  KNN models were created using various values of K for the tuning parameter of the KNN models. See the Tuning Parameter section for the KNN model for more details on why K = 10 was chosen as the value of the tuning parameter.
+
+## Results - KNN
+
+```{r, echo = TRUE}
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+
+#AUC
+#theKNNROC <- roc(blueTarps.knn.roc, knn.fitted, plot=TRUE, main = "KNN ROC Curve")
+#knn.auc <- theKNNROC$auc
+knnFunction(10, "AUC", "Yes")
+#knn.auc.10
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+knn.accuracy <- knnFunction(10,"Accuracy", "No")
+knn.accuracy
+
+# Average True Positive Rate (TPR)
+knn.tpr <- knnFunction(10, "TPR", "No")
+knn.tpr
+
+# Average False Positive Rate (FPR)
+knn.fpr <- knnFunction(10, "FPR", "No")
+knn.fpr
+
+# Average Precision 
+knn.precision <- knnFunction(10, "Precision", "No")
+knn.precision
+
+```
+
+From the metrics, the KNN model has the highest AUC value and TPR compared to logistic regression, LDA, and QDA. It also seems to have the highest accuracy value compared to the previous models as well. THe KNN model with K = 10 seems to also have the lowest FPR value as well. From these metrics, it seems that KNN outperforms the other 3 models for all metrics. It is also the only model so far with a precision higher than 90%. The ROC curve was also once again built from out-of-sample data.
+
+# Penalized Logistic Regression (Ridge Regression)
+
+## Cross-Validation - Ridge Regression
+
+The ridge regression model was created by using the cv.glmnet() function and set lambda to be the optimal lambda determined by cross validation. We also make sure to specify that the alpha value is 0 since we want to perform ridge regression and not lasso regression. Since we are dealing with a binary response variable, we include the specification that the family attribute is binomial.
+
+```{r, echo = TRUE}
+
+library(glmnet) # Library loaded for ridge and lasso
+
+# Set confusion matrix values to 0 
+ridge.tn <- 0 
+ridge.fp <- 0
+ridge.fn <- 0
+ridge.tp <- 0
+
+# Set metrics to 0
+ridge.accuracy <- 0
+ridge.tpr <- 0
+ridge.fpr <- 0
+ridge.precision <- 0
+ridge.auc <- 0
+
+set.seed(1) # Set seed to get consistent results 
+
+matrix.pred <- model.matrix(blueTarps~Red+Blue+Green, data)[,-1] # Create a matrix of the predictors
+ 
+sample.seed <- sample(1:nrow(data), nrow(data)/2) # Create sample seed for test and training split
+cv.output <- cv.glmnet(matrix.pred[sample.seed,], blueTarps[sample.seed], family = 'binomial', alpha = 0)
+
+optimal.lambda <- cv.output$lambda.min # Get the optimal lambda from CV
+optimal.lambda
+
+#Create ridge regression model
+ridge.model <- glmnet(matrix.pred[sample.seed,], blueTarps[sample.seed], alpha = 0, lambda = optimal.lambda, family = 'binomial')
+
+# Grab the probabilities and predictions from the ridge model
+ridge.predict <- predict(ridge.model, s = optimal.lambda, newx = matrix.pred[-sample.seed,], type = 'response')
+
+ridge.preds <- rep(0, length(blueTarps[-sample.seed]))
+ridge.preds[ridge.predict > .01] = 1
+
+# Grab the confusion matrix values for each fold
+ridge.tn <- table(ridge.preds, blueTarps[-sample.seed])[1] # Grab all the True Negatives
+ridge.fp <- table(ridge.preds, blueTarps[-sample.seed])[2] # Grab all the False Positives
+ridge.fn <- table(ridge.preds, blueTarps[-sample.seed])[3] # Grab all the False Negatives
+ridge.tp <- table(ridge.preds, blueTarps[-sample.seed])[4] # Grab all the True Positives
+
+```
+
+Through cross validation, we can also determine the optimal value for our tuning parameter, lambda (in this case it is ~.004 - see justification for optimal lambda value in Tuning Parameters section). We also needed to create a model matrix for the predictor values in order to create our ridge regression and define it as a binomial. This matrix was created by taking our model and creating a matrix using the response variable against the predictors. For our splitting of the data between training and test data, we split the data in half to perform our cross validation compared to where we assigned observations a value 1-10 and set each set of values as test data for each fold in the other models. Similar to our other models, we use a threshold value of .01 (see Threshold Selection section) to reduce the number of false negatives where it predicts a blue tarp as not being a blue tarp since we want to find as many people as possible. 
+
+## Results - Ridge Regression
+
+```{r, echo = TRUE}
+
+# ROC and AUC
+theRidgeROC <- roc(blueTarps[-sample.seed], ridge.predict, plot=TRUE, main="Ridge ROC Curve")
+ridge.auc <- theRidgeROC$auc
+ridge.auc
+
+# Accuracy for each fold
+ridge.accuracy <- ((ridge.tn+ridge.tp)/(ridge.tn + ridge.tp + ridge.fn + ridge.fp))
+ridge.accuracy
+
+# True Positive Rate for each fold
+ridge.tpr <- (ridge.tp / (ridge.tp + ridge.fn))
+ridge.tpr
+
+# False Positive Rate for each fold
+ridge.fpr <- (ridge.fp / (ridge.fp + ridge.tn))
+ridge.fpr
+
+# Precision for each fold
+ridge.precision <- (ridge.tp / (ridge.tp + ridge.fp))
+ridge.precision
+
+```
+
+The ridge regression model produces some interesting results in how they vary compared to the other 4 previous models. First off, our TPR value is perfect (100%) using a threshold value of .01 - this means that our model identifies every observation that is a blue tarp. We see though that the AUC value (though high) is the lowest out of all the models and that the accuracy of the model is very poor. We see though that the FPR rate is outrageously high (most likely because of our low threshold - see Threshold Justification section) and a consequence of our perfect TPR. We also have a precision that is extremely low (again due to the low threshold value for KNN). The ROC curve was also once again built from out-of-sample data.
+
+# Random Forest
+
+## Cross-Validation - Random Forest
+
+In random forest, we are fitting a classification tree to the data using the randomForest() function. Because of this, our tuning parameter for "mtry" (or the number of predictors considered at each branch) would be the square root of 3 (see Threshold Justification section). 
+
+```{r, echo = TRUE}
+
+# https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+
+library(randomForest) # Load MASS library for Random Forest (RF)
+set.seed(1)
+
+# Set metrics to 0
+rf.accuracy <- 0
+rf.tpr <- 0
+rf.fpr <- 0
+rf.precision <- 0
+rf.auc <- 0
+rf.te <- 0
+
+rf.fitted <- vector()
+blueTarps.rf.roc <- vector()
+
+# Conduct cross validation on the RF model using the training data and testing on the test data from CV
+for(eachFold in 1:k) {
+  
+  # Set confusion matrix values to 0  - reset for each fold
+  rf.tn <- 0 
+  rf.fp <- 0
+  rf.fn <- 0
+  rf.tp <- 0
+
+  # Split the data into training and test
+  train <- data[tenFold != eachFold, ]
+  test <- data[tenFold == eachFold, ]
+  blueTarps.train <- blueTarps[tenFold != eachFold]
+  blueTarps.test <- blueTarps[tenFold == eachFold]
+  blueTarps.rf.roc <- append(blueTarps.rf.roc, blueTarps.test) # Add test response values to vector for each fold
+  
+  # Create the Random Forest model
+  rf.model <- randomForest(blueTarps ~ Red + Green + Blue, data = train, mtry = sqrt(3), importance=TRUE)
+  
+  # Grab the predictions of the Random Forest model
+  #rf.preds <- predict(rf.model, newdata = test, type='prob')
+  # https://stats.stackexchange.com/questions/226109/how-does-predict-randomforest-estimate-class-probabilities
+  rf.probs <- predict(rf.model, newdata = test, type = 'prob')
+  rf.preds <- rep(0,nrow(test)) # Create vector with all 0s
+  rf.preds[rf.probs[,2] > .45] = 1 # Replace zeros in above vector with 1 if above .5
+  
+  rf.fitted <- append(rf.fitted, rf.probs[,2]) # Add probabilities of each fold to vector
+  
+  # Grab the confusion matrix values for each fold
+  rf.tn <- rf.tn + table(rf.preds, blueTarps.test)[1] # Grab all the True Negatives
+  rf.fp <- rf.fp + table(rf.preds, blueTarps.test)[2] # Grab all the False Positives
+  rf.fn <- rf.fn + table(rf.preds, blueTarps.test)[3] # Grab all the False Negatives
+  rf.tp <- rf.tp + table(rf.preds, blueTarps.test)[4] # Grab all the True Positives
+
+  # Accuracy for each fold
+  rf.accuracy <- rf.accuracy + ((rf.tn + rf.tp)/(rf.tn + rf.tp + rf.fn + rf.fp))
+  
+  # True Positive Rate for each fold
+  rf.tpr <- rf.tpr + (rf.tp / (rf.tp + rf.fn))
+  
+  # False Positive Rate for each fold
+  rf.fpr <- rf.fpr + (rf.fp / (rf.fp + rf.tn))
+  
+  # Precision for each fold
+  rf.precision <- rf.precision + (rf.tp / (rf.tp + rf.fp))
+  
+}
+
+```
+
+## Results - Random Forest
+
+```{r, echo = TRUE}
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+theRFROC <- roc(blueTarps.rf.roc, rf.fitted, plot=TRUE, main = "RF ROC Curve")
+rf.auc <- theRFROC$auc
+rf.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+rf.accuracy <- rf.accuracy / k
+rf.accuracy
+
+# Average True Positive Rate (TPR)
+rf.tpr <- rf.tpr / k
+rf.tpr
+
+# Average False Positive Rate (FPR)
+rf.fpr <- rf.fpr / k
+rf.fpr
+
+# Average Precision 
+rf.precision <- rf.precision / k
+rf.precision
+
+```
+Using the random forest model, we see from the metrics that we get really good performance that performs just as well as the KNN model. We have really high values for our AUC, Accuracy, TPR, and Precision while also having an FPR less than 1%. This is reflected in the ROC curve where it demonstrates that the model does very well and has only a slight kink in the elbow of the plot. The ROC curve was once again built from out-of-sample data.
+
+# SVM - Linear
+
+## Cross-Validation - SVM (Linear)
+
+```{r, cache = TRUE}
+
+# https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+
+library(e1071) # Load MASS library for Support Vector Machines (svm)
+set.seed(1)
+
+# Set metrics to 0
+svm.accuracy <- 0
+svm.tpr <- 0
+svm.fpr <- 0
+svm.precision <- 0
+svm.auc <- 0
+
+svm.fitted <- vector()
+blueTarps.svm.roc <- vector()
+blueTarps.svm.roc <- append(blueTarps.svm.roc, blueTarps[-sample.seed]) # Add test response values to vector for each fold
+
+# Create the Support Vector Machines model
+svm.cv <- tune(svm, blueTarps~Blue + Red + Green, data=data[sample.seed,], kernel='linear', probability = TRUE, ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+summary(svm.cv)
+
+svm.model <- svm.cv$best.model
+
+# Grab the predictions of the Support Vector Machines model
+svm.predict <- predict(svm.model, data[-sample.seed,], probability=TRUE)
+svm.probs <- attr(svm.predict, 'probabilities')[,2]
+#svm.preds <- predict(svm.model, test)
+svm.preds <- rep(0,length(blueTarps[-sample.seed])) # Create vector with all 0s
+svm.preds[svm.probs > .25] = 1 # Replace zeros in above vector with 1 if above .5
+
+svm.fitted <- append(svm.fitted, svm.probs) # Add probabilities of each fold to vector
+
+# Grab the confusion matrix values for each fold
+svm.tn <- table(svm.preds, blueTarps[-sample.seed])[1] # Grab all the True Negatives
+svm.fp <- table(svm.preds, blueTarps[-sample.seed])[2] # Grab all the False Positives
+svm.fn <- table(svm.preds, blueTarps[-sample.seed])[3] # Grab all the False Negatives
+svm.tp <- table(svm.preds, blueTarps[-sample.seed])[4] # Grab all the True Positives
+
+# Accuracy for each fold
+svm.accuracy <- ((svm.tn + svm.tp)/(svm.tn + svm.tp + svm.fn + svm.fp))
+
+# True Positive Rate for each fold
+svm.tpr <-(svm.tp / (svm.tp + svm.fn))
+
+# False Positive Rate for each fold
+svm.fpr <- (svm.fp / (svm.fp + svm.tn))
+
+# Precision for each fold
+svm.precision <- (svm.tp / (svm.tp + svm.fp))
+  
+
+```
+
+## Results - SVM (Linear)
+
+```{r, echo = TRUE}
+
+# Cost = 100, CV = .004617331
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+theSVMROC <- roc(blueTarps.svm.roc, svm.fitted, plot=TRUE, main = "SVM ROC Curve - Linear")
+svm.auc <- theSVMROC$auc
+svm.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+svm.accuracy
+
+# Average True Positive Rate (TPR)
+svm.tpr
+
+# Average False Positive Rate (FPR)
+svm.fpr
+
+# Average Precision 
+svm.precision
+
+```
+
+# SVM - Radial
+
+## Cross-Valdiation - SVM (Radial)
+
+```{r, cache = TRUE}
+
+# https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+
+library(e1071) # Load MASS library for Support Vector Machines (svm.radial)
+set.seed(1)
+
+# Set metrics to 0
+svm.radial.accuracy <- 0
+svm.radial.tpr <- 0
+svm.radial.fpr <- 0
+svm.radial.precision <- 0
+svm.radial.auc <- 0
+
+svm.radial.fitted <- vector()
+blueTarps.svm.radial.roc <- vector()
+blueTarps.svm.radial.roc <- append(blueTarps.svm.radial.roc, blueTarps[-sample.seed]) # Add test response values to vector for each fold
+
+  
+# Create the Support Vector Machines model
+svm.radial.cv <- tune(svm, blueTarps~Blue + Red + Green, data=data[sample.seed,], kernel='radial', probability = TRUE, ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100), gamma = c(0.5,1,2,3,4)))
+summary(svm.radial.cv)
+
+svm.radial.model <- svm.radial.cv$best.model
+
+# Grab the predictions of the Support Vector Machines model
+svm.radial.predict <- predict(svm.radial.model, data[-sample.seed,], probability=TRUE)
+svm.radial.probs <- attr(svm.radial.predict, 'probabilities')[,2]
+#svm.radial.preds <- predict(svm.radial.model, test)
+svm.radial.preds <- rep(0,length(blueTarps[-sample.seed])) # Create vector with all 0s
+svm.radial.preds[svm.radial.probs > .25] = 1 # Replace zeros in above vector with 1 if above .5
+
+svm.radial.fitted <- append(svm.radial.fitted, svm.radial.probs) # Add probabilities of each fold to vector
+
+# Grab the confusion matrix values for each fold
+svm.radial.tn <- table(svm.radial.preds, blueTarps[-sample.seed])[1] # Grab all the True Negatives
+svm.radial.fp <- table(svm.radial.preds, blueTarps[-sample.seed])[2] # Grab all the False Positives
+svm.radial.fn <- table(svm.radial.preds, blueTarps[-sample.seed])[3] # Grab all the False Negatives
+svm.radial.tp <- table(svm.radial.preds, blueTarps[-sample.seed])[4] # Grab all the True Positives
+
+# Test Error
+svm.radial.te <- mean(svm.radial.preds != blueTarps[-sample.seed])
+
+# Accuracy for each fold
+svm.radial.accuracy <- ((svm.radial.tn + svm.radial.tp)/(svm.radial.tn + svm.radial.tp + svm.radial.fn + svm.radial.fp))
+
+# True Positive Rate for each fold
+svm.radial.tpr <-  (svm.radial.tp / (svm.radial.tp + svm.radial.fn))
+
+# False Positive Rate for each fold
+svm.radial.fpr <- (svm.radial.fp / (svm.radial.fp + svm.radial.tn))
+
+# Precision for each fold
+svm.radial.precision <- (svm.radial.tp / (svm.radial.tp + svm.radial.fp))
+  
+```
+
+
+## Results - SVM (Radial)
+
+```{r, echo = TRUE}
+
+# Cost = 100, Gamma = 4, CV Error = .002593295
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+thesvm.radialROC <- roc(blueTarps.svm.radial.roc, svm.radial.fitted, plot=TRUE, main = "SVM ROC Curve - Radial")
+svm.radial.auc <- thesvm.radialROC$auc
+svm.radial.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+svm.radial.accuracy
+
+# Average True Positive Rate (TPR)
+svm.radial.tpr
+
+# Average False Positive Rate (FPR)
+svm.radial.fpr
+
+# Average Precision 
+svm.radial.precision
+
+```
+
+# SVM - Polynomial
+
+## Cross-Validation - SVM (Polynomial)
+
+```{r, cache = TRUE}
+
+# https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/append
+
+library(e1071) # Load MASS library for Support Vector Machines (svm.poly)
+set.seed(1)
+
+# Set metrics to 0
+svm.poly.accuracy <- 0
+svm.poly.tpr <- 0
+svm.poly.fpr <- 0
+svm.poly.precision <- 0
+svm.poly.auc <- 0
+
+svm.poly.fitted <- vector()
+blueTarps.svm.poly.roc <- vector()
+blueTarps.svm.poly.roc <- append(blueTarps.svm.poly.roc, blueTarps[-sample.seed]) # Add test response values to vector for each fold
+
+  
+# Create the Support Vector Machines model
+svm.poly.cv <- tune(svm, blueTarps~Blue + Red + Green, data=data[sample.seed,], kernel='polynomial', probability = TRUE, ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100), degree = c(1,2,3,4,5)))
+summary(svm.poly.cv)
+
+svm.poly.model <- svm.poly.cv$best.model
+
+# Grab the predictions of the Support Vector Machines model
+svm.poly.predict <- predict(svm.poly.model, data[-sample.seed,], probability=TRUE)
+svm.poly.probs <- attr(svm.poly.predict, 'probabilities')[,2]
+#svm.poly.preds <- predict(svm.poly.model, test)
+svm.poly.preds <- rep(0,length(blueTarps[-sample.seed])) # Create vector with all 0s
+svm.poly.preds[svm.poly.probs > .5] = 1 # Replace zeros in above vector with 1 if above .5
+
+svm.poly.fitted <- append(svm.poly.fitted, svm.poly.probs) # Add probabilities of each fold to vector
+
+# Grab the confusion matrix values for each fold
+svm.poly.tn <- table(svm.poly.preds, blueTarps[-sample.seed])[1] # Grab all the True Negatives
+svm.poly.fp <- table(svm.poly.preds, blueTarps[-sample.seed])[2] # Grab all the False Positives
+svm.poly.fn <- table(svm.poly.preds, blueTarps[-sample.seed])[3] # Grab all the False Negatives
+svm.poly.tp <- table(svm.poly.preds, blueTarps[-sample.seed])[4] # Grab all the True Positives
+
+# Test Error
+svm.poly.te <- mean(svm.poly.preds != blueTarps[-sample.seed])
+
+# Accuracy for each fold
+svm.poly.accuracy <- ((svm.poly.tn + svm.poly.tp)/(svm.poly.tn + svm.poly.tp + svm.poly.fn + svm.poly.fp))
+
+# True Positive Rate for each fold
+svm.poly.tpr <- (svm.poly.tp / (svm.poly.tp + svm.poly.fn))
+
+# False Positive Rate for each fold
+svm.poly.fpr <- (svm.poly.fp / (svm.poly.fp + svm.poly.tn))
+
+# Precision for each fold
+svm.poly.precision <- (svm.poly.tp / (svm.poly.tp + svm.poly.fp))
+  
+
+```
+
+## Results - SVM (Polynomial)
+
+```{r, echo = TRUE}
+
+# Cost = 10 ,Degree = 1, CV error = .004680582
+
+# ROC and AUC
+# https://www.youtube.com/watch?v=4jRBRDbJemM&t=739s
+# https://www.youtube.com/watch?v=qcvAqAH60Yw&t=196s&ab_channel=StatQuestwithJoshStarmer
+thesvm.polyROC <- roc(blueTarps.svm.poly.roc, svm.poly.fitted, plot=TRUE, main = "SVM ROC Curve - Polynomial")
+svm.poly.auc <- thesvm.polyROC$auc
+svm.poly.auc
+
+# Accuracy of Logistic Regression Model (grab the average accuracy of all ten folds)
+svm.poly.accuracy
+
+# Average True Positive Rate (TPR)
+svm.poly.tpr
+
+# Average False Positive Rate (FPR)
+svm.poly.fpr
+
+# Average Precision 
+svm.poly.precision
+
+```
+
+For the Support Vector Machine, we looked at SVM models with a linear, radial, and polynomial kernel. From these models, we looked at several different values of their parameters (cost for linear, cost & gamma for radial, and cost & degree for polynomial) to determine the optimal model for each. Using the tune() function, we are able to perform cross validation on each SVM model and go through each possible implementation of the parameters in question. The model with the optimal parameters (or the model with the parameters that provided the lowest CV error) were used to determine the metrics. For the linear kernel the optimal cost value was 100, for radial it was a cost value of 100 and gamma value of 4, and for polynomial it was a cost value of 10 and degree of 1. Using these parameters on each SVM model, the CV errors of the optimal model for each kernel were compared against one another to determine which SVM model to proceed with. The SVM model with the radial kernel (cost = 100, gamma = 4) had the lowest CV error between the 3 models so this is the SVM model we will proceed with this model and associated parameters.
+
+From the results of the SVM - Radial model, we see that our AUC is really good at .9995 (the closest model to 100%). The accuracy of the model is about .997, TPR of .968, FPR of ~.002, and precision value of .938. From this, we see that our model performs pretty well compared to the other models and is similar in performance to our KNN model.
+
+# Tuning Parameters
+
+## KNN - K-Value
+
+```{r, echo = TRUE}
+
+# Sources
+# https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html
+# https://www.statology.org/create-table-in-r/
+
+library(kableExtra)
+
+knn.auc.1
+knn.auc.2
+knn.auc.3 
+knn.auc.4 
+knn.auc.5 
+knn.auc.6 
+knn.auc.7 
+knn.auc.8 
+knn.auc.9
+knn.auc.10
+
+auc.data <- data.frame(Value_of_K = c("1", "2", "3", "4", "5", "6", "7", "8","9","10"), AUC = c(knn.auc.1,knn.auc.2,knn.auc.3,knn.auc.4,knn.auc.5,knn.auc.6,knn.auc.7,knn.auc.8,knn.auc.9, knn.auc.10))
+
+# Creates embedded table into R Studio
+auc.data %>%
+  kbl(digits = 4) %>%
+  kable_material_dark()
+
+```
+
+For the value of K for the KNN model, we want to use a K value where the AUC is the highest of all the models observed. The way that this was determined was to use the above code block with different values of K and calculate the AUC for each value of K. From there, the model with value of K that had the highest AUC value would be selected. From my observations, a value of K = 10 had the highest AUC, thus K = 10 was selected for the final model (as seen in the table above).
+
+In the code block/table above, we can see the test error rate for the values of K that were experimented with (K values from 1 to 10). We see that the test error rate is lowest (out of the range of K-values selected at K - 10).
+
+## Ridge Regression - Optimal Lambda
+
+```{r, echo = TRUE}
+
+#plot(cv.output)
+optimal.lambda # The optimal lambda value
+log(optimal.lambda)
+plot(cv.output$cvm, log(cv.output$lambda), xlab = "Error", ylim = c(-6,0), ylab = "Log-Lambda", main = "Mean CV Errors vs Lambda Values") # Erros vs Log Lambda
+
+
+```
+
+From our ridge regression previously, we determined the optimal lambda value using the cv.glmnet() function and performing the 10-fold cross validation process and use the lambda.min function to get our optimal lambda.From this fitting of the ridge regression model, we were able to get the mean cross-validated error as well as the lambdas for each associated error. Using a plot of the error vs the log of the lambdas, we can see that our optimal lambda value falls where the error is the lowest (the optima lambda is ~.004). The log of our optimal lambda is -5.484345 and we can see the plot above shows that log-lambda value at the lowest error rate. 
+
+## Random Forest - "Mtry"
+
+For Random Forest, the tuning parameter that needed to be determined was the "mtry" parameter. This parameter determines the number of predictors that should be considered at each branch/split of the tree. Since our response variable is binary, we are dealing with a classification problem and the rule of thumb with using a Random Forest model on a classification problem is to use the square root of the number of predictors. In this case, we used the square root of 3 (Blue, Green, Red) as our value for "mtry". 
+
+## SVM (Radial Kernel) - Cost & Gamma
+
+```{r}
+
+summary(svm.radial.cv)
+
+```
+
+For the Support Vector Machine, a variety of cost and gamma parameters were selected to determine the optimal parameters to use on the SVM - Radial model. Using cross-validation, CV errors were calculated for each combination of cost and gamma values. The cost values examined were .001, 0.01, 0.1, 1, 5, 10, and 100 while the gamma values examined were 0.5, 1,2, 3, and 4. The cost and gamma combination that had the lowest CV error for the SVM- Radial model was a cost value of 100 and gamma value of 4.
+
+A similar approach was used for the linear and polynomial kernels but are not mentioned here since they were not selected as the SVM model of choice.
+
+# Threshold Selection
+
+The values for thresholds were updated between Part 1 and Part 2 of this project to incorporate different values in the threshold (originally all threshold values were .25). For threshold selection, I made some assumptions to what the threshold value would be for each model. For the threshold, we want to keep in mind the fact that we are primarily concerned with identifying blue tarps correctly and have a secondary objective of doing it within a resource constraint. To this end, we want to examine the TPR value of each range and do our best to reduce the number of false negatives while keeping in mind the resource constraint. For this, I analyzed the TPR value of each model and assumed that a marginal benefit was received for every 5% increase in the TPR rate. For example, if the model has a TPR of 93%, I will decrease my threshold if it was possible to raise the TPR to 95%. If not, I would increase my threshold to be as close to 90% as possible. I assumed a TPR between 90-95% (for example) was not enough to justify reducing the threshold to get to that value unless the TPR was able to reach 95% (i.e. I would only set my TPR near 90% or 95% in this example case) . Please note that many threshold values were examined but were not included as part of the code – only the selected value was incorporated into the code.
+
+The only exception to the above assumption was the Support Vector Machines. To consider time constraint to identify different threshold values, I assumed a value of .25 for the threshold to incorporate a decrease in false negatives but not so much that the number of false positives increases too much.In reality, more information would be required on the resource constraints involved on this project. 
+
+In a real-world scenario, it made not be possible to expend the amount of resources to justify threshold levels that are super low (for example at 1%) because of financial constraints and limited labor resources to be able to support some of the models high TPR rates and high FPR rates.
+
+Additionally, the thresholds were set to the estimated/posterior probabilities of each model - these are the probabilities that the prediction is a blue tarp. Any of the probabilities greater than the threshold value were deemed to be a blue tarp and any probability below was predicted not to be a blue tarp. The predictions then were placed into a vector and compared in the confusion matrix with the values in the response of the test data.
+
+
+# Cross-Validation Performance Table
+
+```{r, echo = TRUE}
+
+# Sources
+# https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html
+# https://www.statology.org/create-table-in-r/
+
+library(kableExtra) # Load library to create embedded table
+
+# Create a data frame for required metrics
+theTable <- data.frame(Model=c("Logistic Regression", "LDA", "QDA", "KNN", "Penalized Log. Reg.", "Random Forest", "SVM - Radial"),Tuning =c("NA", "NA", "NA", 10, round(optimal.lambda,4), round(sqrt(3),4), "Cost - 100; Gamma - 4"), AUROC = c(log.auc, lda.auc, qda.auc, knn.auc.10, ridge.auc, rf.auc, svm.auc), Threshold = c(.14,.09,.1,.59,.01,.45, .25), Accuracy = c(log.accuracy, lda.accuracy, qda.accuracy, knn.accuracy, ridge.accuracy,rf.accuracy, svm.accuracy), TPR = c(tpr, lda.tpr, qda.tpr, knn.tpr, ridge.tpr, rf.tpr, svm.tpr), FPR = c(fpr, lda.fpr, qda.fpr, knn.fpr, ridge.fpr, rf.fpr, svm.fpr), Precision = c(log.precision, lda.precision, qda.precision, knn.precision, ridge.precision, rf.precision, svm.precision))
+
+theTable # See the data frame created
+
+# Creates embedded table into R Studio
+theTable %>%
+  kbl(digits = 4) %>%
+  kable_material_dark()
+
+```
+
+The performance table above shows the metrics that were gathered from each model. The AUC values were determined by creating the ROC curve from the actual response values and estimated probabilities. The tuning parameter for KNN (for the value of K) was determined by creating KNN models with various values of KNN and determining that K = 1 was the optimal value because that KNN model had the lowest test error. For ridge regression, cross-validation was used to determine the optimal (i.e. minimum) value of lambda (i.e. the tuning parameter). For the other models, a tuning parameter was not required. The threshold of all models were set to .25 against the estimated probabilities - this seemed to be a good value to get as many blue tarps identified correctly as possible while keeping in mind the resource constraint of the problem. The values for accuracy, TPR, FPR, and precision were all calculated using the values of the confusion matrix. These metrics were calculated using an average - the metrics of each fold from the cross validation were calculated and divided by 10 (the number of folds) to calculate the average for each metric.
+
+
+# Hold-Out Data Section - Part 2
+
+## Import Hold-Out Data
+
+```{r}
+
+# http://www.sthda.com/english/wiki/reading-data-from-txt-csv-files-r-base-functions
+# https://statisticsglobe.com/add-header-to-data-frame-in-r
+
+hold1 <- read.table("orthovnir057_ROI_NON_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold1$Type <- "Other"
+hold2 <- read.table("orthovnir067_ROI_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold2$Type <- "Blue Tarp"
+hold3 <- read.table("orthovnir067_ROI_NOT_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold3$Type <- "Other"
+hold4 <- read.table("orthovnir069_ROI_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold4$Type <- "Blue Tarp"
+hold5 <- read.table("orthovnir069_ROI_NOT_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold5$Type <- "Other"
+hold6 <- read.table("orthovnir078_ROI_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold6$Type <- "Blue Tarp"
+hold7 <- read.table("orthovnir078_ROI_NON_Blue_Tarps.txt", header=FALSE, comment.char =";", col.names = c("ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon", "B1", "B2", "B3"))
+hold7$Type <- "Other"
+
+
+holdout <- rbind(hold1, hold2, hold3, hold4, hold5, hold6, hold7)
+
+
+## LOOK AT A PAIRS PLOT TO DETERMINE RGB in holdout data; can also try density plot or violin plot or histograms
+```
+
+Using the read.table() function, each text file that makes up the hold out data was imported into the R script. The parameter comment.char was used in order to read the rows that had a semi-colon at the beginning and removes it from the data being imported. One of the rows removed has the header row so the parameter col.names must be used in order to define the columns in each data set. We also see that one of the text files provided was duplicated data that did not need to be imported (duplicated data from the "orthovnir067_ROI_Blue_Tarps.txt" file). To combine the data frames together, the rbind() function was used to combine the rows of the data sets into one big data frame to form the holdout data set.
+
+## Exploratory Data Analysis - Holdout
+
+```{r, echo=TRUE, cache=TRUE}
+
+holdout$blueTarpsHold <- ifelse(holdout$Type == "Blue Tarp", 1, 0)
+holdout$blueTarpsHold <- factor(holdout$blueTarpsHold)
+blueTarpsHold <-holdout$blueTarpsHold
+attach(holdout)
+
+par(mfrow=c(2,3))
+hist(data$Red)
+hist(data$Green)
+hist(data$Blue)
+hist(B1)
+hist(B2)
+hist(B3)
+
+par(mfrow=c(1,3))
+plot(B1, B2, main = "B1 vs B2 Scatterplot")
+plot(B2, B3, main = "B2 vs B3 Scatterplot")
+plot(B1, B3, main = "B1 vs B3 Scatterplot")
+
+# Source: https://stackoverflow.com/questions/6081439/changing-column-names-of-a-data-frame
+colnames(holdout)[8] <- c("Red")
+colnames(holdout)[9] <- c("Green")
+colnames(holdout)[10] <- c("Blue")
+
+
+
+```
+
+For our EDA on the holdout data set, we use histograms to compare the distributions of B1, B2, and B3 with the distributions of Red, Blue, Green from our training set. Comparing the distributions of the attributes from the holdout data set and the training data set, we make the connection that B1 = Red, B2 = Green, and B3 = Blue. From this, the columns in the holdout data set need to be relabeled as such.
+
+Also, from our scatterplots, we see that the three predictors in question (B1, B2, and B3) seem to have linear relationships between one another (similar to what we saw with Red, Green, Blue in our training data set as well).
+
+## Method Approach - Part 2
+
+Note that the only major change from Part 1is the test data (i.e. holdout data) that the models are being predicted on. Using the same prediction methods and code implementation from Part 1, the following code blocks will be taking the models determined from Part 1 (with same threshold values, predictors, etc,) and be predicted onto the holdout data set. The same metrics from before (AUC, Accuracy, TPR, FPR, and Precision) will all be re-calculated into a new performance table to determine which model fared the best. ROC curves will all be developed as well and built from the out-of-sample data too. There will not be any cross-validation or training necessary since that was already performed in the code for Part 1. 
+
+# Holdout Predictions
+
+## Logistic Regression - Holdout
+
+```{r, echo=TRUE, cache=TRUE}
+
+# Use logistic regression model to predict on the holdout data
+log.hold.probs <- predict(log.result, holdout, type='response')
+log.hold.preds <- rep(0, nrow(holdout))
+log.hold.preds[log.hold.probs > .14] = 1
+
+# Create confusion matrix and grab values
+log.hold.tn <- table(log.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+log.hold.fp <- table(log.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+log.hold.fn <- table(log.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+log.hold.tp <- table(log.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+log.hold.roc <- roc(blueTarpsHold, log.hold.probs, plot=TRUE, main = "Logistic Regression (Holdout) ROC")
+log.hold.auc <- log.hold.roc$auc
+log.hold.auc
+
+# Accuracy for each fold
+log.hold.accuracy <-  ((log.hold.tn + log.hold.tp)/(log.hold.tn + log.hold.tp + log.hold.fn + log.hold.fp))
+log.hold.accuracy
+
+# True Positive Rate for each fold
+log.hold.tpr <-(log.hold.tp / (log.hold.tp + log.hold.fn))
+log.hold.tpr
+
+# False Positive Rate for each fold
+log.hold.fpr <- (log.hold.fp / (log.hold.fp + log.hold.tn))
+log.hold.fpr
+
+# Precision for each fold
+log.hold.precision <- (log.hold.tp / (log.hold.tp + log.hold.fp))
+log.hold.precision
+
+```
+
+## LDA - Holdout
+
+```{r, echo=TRUE, cache=TRUE}
+
+# Use LDA  model to predict on the holdout data
+lda.hold.probs <- predict(lda.model, holdout)
+lda.hold.probs <- lda.hold.probs$posterior[,2]
+lda.hold.preds <- rep(0, nrow(holdout))
+lda.hold.preds[lda.hold.probs > .09] = 1
+
+# Create confusion matrix and grab values
+lda.hold.tn <- table(lda.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+lda.hold.fp <- table(lda.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+lda.hold.fn <- table(lda.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+lda.hold.tp <- table(lda.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+lda.hold.roc <- roc(blueTarpsHold, lda.hold.probs, plot=TRUE, main = "LDA (Holdout) ROC")
+lda.hold.auc <- lda.hold.roc$auc
+lda.hold.auc
+
+# Accuracy for each fold
+lda.hold.accuracy <-  ((lda.hold.tn + lda.hold.tp)/(lda.hold.tn + lda.hold.tp + lda.hold.fn + lda.hold.fp))
+lda.hold.accuracy
+
+# True Positive Rate for each fold
+lda.hold.tpr <-(lda.hold.tp / (lda.hold.tp + lda.hold.fn))
+lda.hold.tpr
+
+# False Positive Rate for each fold
+lda.hold.fpr <- (lda.hold.fp / (lda.hold.fp + lda.hold.tn))
+lda.hold.fpr
+
+# Precision for each fold
+lda.hold.precision <- (lda.hold.tp / (lda.hold.tp + lda.hold.fp))
+lda.hold.precision
+
+```
+
+## QDA - Holdout
+
+```{r, echo=TRUE, cache=TRUE}
+
+# Use QDA model to predict on the holdout data
+qda.hold.probs <- predict(qda.model, holdout)
+qda.hold.probs <- qda.hold.probs$posterior[,2]
+qda.hold.preds <- rep(0, nrow(holdout))
+qda.hold.preds[qda.hold.probs > .1] = 1
+
+# Create confusion matrix and grab values
+qda.hold.tn <- table(qda.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+qda.hold.fp <- table(qda.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+qda.hold.fn <- table(qda.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+qda.hold.tp <- table(qda.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+qda.hold.roc <- roc(blueTarpsHold, qda.hold.probs, plot=TRUE, main = "QDA (Holdout) ROC")
+qda.hold.auc <- qda.hold.roc$auc
+qda.hold.auc
+
+# Accuracy for each fold
+qda.hold.accuracy <-  ((qda.hold.tn + qda.hold.tp)/(qda.hold.tn + qda.hold.tp + qda.hold.fn + qda.hold.fp))
+qda.hold.accuracy
+
+# True Positive Rate for each fold
+qda.hold.tpr <-(qda.hold.tp / (qda.hold.tp + qda.hold.fn))
+qda.hold.tpr
+
+# False Positive Rate for each fold
+qda.hold.fpr <- (qda.hold.fp / (qda.hold.fp + qda.hold.tn))
+qda.hold.fpr
+
+# Precision for each fold
+qda.hold.precision <- (qda.hold.tp / (qda.hold.tp + qda.hold.fp))
+qda.hold.precision
+
+```
+
+## KNN - Holdout
+
+```{r, echo=TRUE, cache=TRUE}
+
+knn.model <- knn3(blueTarps~Red + Green + Blue, data = train, k = 10)
+
+# Use KNN model to predict on the holdout data
+knn.hold.probs <- predict(knn.model, holdout, type="prob")[,2]
+knn.hold.preds <- rep(0, nrow(holdout))
+knn.hold.preds[knn.hold.probs > .59] = 1
+
+# Create confusion matrix and grab values
+knn.hold.tn <- table(knn.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+knn.hold.fp <- table(knn.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+knn.hold.fn <- table(knn.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+knn.hold.tp <- table(knn.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+knn.hold.roc <- roc(blueTarpsHold, knn.hold.probs, plot=TRUE, main = "KNN (Holdout) ROC")
+knn.hold.auc <- knn.hold.roc$auc
+knn.hold.auc
+
+# Accuracy for each fold
+knn.hold.accuracy <-  ((knn.hold.tn + knn.hold.tp)/(knn.hold.tn + knn.hold.tp + knn.hold.fn + knn.hold.fp))
+knn.hold.accuracy
+
+# True Positive Rate for each fold
+knn.hold.tpr <-(knn.hold.tp / (knn.hold.tp + knn.hold.fn))
+knn.hold.tpr
+
+# False Positive Rate for each fold
+knn.hold.fpr <- (knn.hold.fp / (knn.hold.fp + knn.hold.tn))
+knn.hold.fpr
+
+# Precision for each fold
+knn.hold.precision <- (knn.hold.tp / (knn.hold.tp + knn.hold.fp))
+knn.hold.precision
+
+```
+
+## Ridge Regression - Holdout
+
+```{r}
+
+# Create a matrix with the new holdout data and predict using the ridge regression model
+set.seed(1)
+matrix.hold.pred <- model.matrix(blueTarpsHold~Red+Blue+Green, holdout)[,-1]
+ridge.hold.probs <- predict(ridge.model, s = optimal.lambda, newx = matrix.hold.pred[1:nrow(holdout),], type = 'response')
+
+ridge.hold.preds <- rep(0, nrow(holdout))
+ridge.hold.preds[ridge.hold.probs > .01] = 1
+
+# Grab the values from the confusion matrix values for calculating metrics
+ridge.hold.tn <- table(ridge.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+ridge.hold.fp <- table(ridge.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+ridge.hold.fn <- table(ridge.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+ridge.hold.tp <- table(ridge.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+ridge.hold.roc <- roc(blueTarpsHold, ridge.hold.probs, plot=TRUE, main = "Ridge (Holdout) ROC")
+ridge.hold.auc <- ridge.hold.roc$auc
+ridge.hold.auc
+
+# Accuracy for each fold
+ridge.hold.accuracy <-  ((ridge.hold.tn + ridge.hold.tp)/(ridge.hold.tn + ridge.hold.tp + ridge.hold.fn + ridge.hold.fp))
+ridge.hold.accuracy
+
+# True Positive Rate for each fold
+ridge.hold.tpr <-(ridge.hold.tp / (ridge.hold.tp + ridge.hold.fn))
+ridge.hold.tpr
+
+# False Positive Rate for each fold
+ridge.hold.fpr <- (ridge.hold.fp / (ridge.hold.fp + ridge.hold.tn))
+ridge.hold.fpr
+
+# Precision for each fold
+ridge.hold.precision <- (ridge.hold.tp / (ridge.hold.tp + ridge.hold.fp))
+ridge.hold.precision
+
+
+```
+
+## Random Forest - Holdout
+
+```{r}
+
+# Use Random Forest model to predict on the holdout data
+rf.hold.probs <- predict(rf.model, holdout, type='prob')
+rf.hold.preds <- rep(0, nrow(holdout))
+rf.hold.preds[rf.hold.probs[,2] > .45] = 1
+
+# Create confusion matrix and grab values
+rf.hold.tn <- table(rf.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+rf.hold.fp <- table(rf.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+rf.hold.fn <- table(rf.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+rf.hold.tp <- table(rf.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+rf.hold.roc <- roc(blueTarpsHold, rf.hold.probs[,2], plot=TRUE, main = "Random Forest (Holdout) ROC")
+rf.hold.auc <- rf.hold.roc$auc
+rf.hold.auc
+
+# AcNote that the only major change from Part 1is the test data (i.e. holdout data) that the models are being predicted on.curacy for each fold
+rf.hold.accuracy <-  ((rf.hold.tn + rf.hold.tp)/(rf.hold.tn + rf.hold.tp + rf.hold.fn + rf.hold.fp))
+rf.hold.accuracy
+
+# True Positive Rate for each fold
+rf.hold.tpr <-(rf.hold.tp / (rf.hold.tp + rf.hold.fn))
+rf.hold.tpr
+
+# False Positive Rate for each fold
+rf.hold.fpr <- (rf.hold.fp / (rf.hold.fp + rf.hold.tn))
+rf.hold.fpr
+
+# Precision for each fold
+rf.hold.precision <- (rf.hold.tp / (rf.hold.tp + rf.hold.fp))
+rf.hold.precision
+
+```
+
+
+## SVM Radial - Holdout
+
+```{r}
+
+# Grab the predictions of the Support Vector Machines model
+svm.radial.hold.predict <- predict(svm.radial.model, holdout, probability=TRUE)
+svm.radial.hold.probs <- attr(svm.radial.hold.predict, 'probabilities')[,2]
+svm.radial.hold.preds <- rep(0,nrow(holdout)) # Create vector with all 0s
+svm.radial.hold.preds[svm.radial.hold.probs > .25] = 1 # Replace zeros in above vector with 1 if above .5
+
+# Grab the confusion matrix values for each fold
+svm.radial.hold.tn <- table(svm.radial.hold.preds, blueTarpsHold)[1] # Grab all the True Negatives
+svm.radial.hold.fp <- table(svm.radial.hold.preds, blueTarpsHold)[2] # Grab all the False Positives
+svm.radial.hold.fn <- table(svm.radial.hold.preds, blueTarpsHold)[3] # Grab all the False Negatives
+svm.radial.hold.tp <- table(svm.radial.hold.preds, blueTarpsHold)[4] # Grab all the True Positives
+
+#AUC
+svm.radial.hold.roc <- roc(blueTarpsHold, svm.radial.hold.probs, plot=TRUE, main= "SVM Radial (Holdout) ROC")
+svm.radial.hold.auc <- svm.radial.hold.roc$auc
+svm.radial.hold.auc
+
+# Accuracy for each fold
+svm.radial.hold.accuracy <- ((svm.radial.hold.tn + svm.radial.hold.tp)/(svm.radial.hold.tn + svm.radial.hold.tp + svm.radial.hold.fn + svm.radial.hold.fp))
+svm.radial.hold.accuracy
+
+# True Positive Rate for each fold
+svm.radial.hold.tpr <-  (svm.radial.hold.tp / (svm.radial.hold.tp + svm.radial.hold.fn))
+svm.radial.hold.tpr
+
+# False Positive Rate for each fold
+svm.radial.hold.fpr <- (svm.radial.hold.fp / (svm.radial.hold.fp + svm.radial.hold.tn))
+svm.radial.hold.fpr
+
+# Precision for each fold
+svm.radial.hold.precision <- (svm.radial.hold.tp / (svm.radial.hold.tp + svm.radial.hold.fp))
+svm.radial.hold.precision
+  
+```
+
+# Holdout Test Performance Table
+
+```{r, echo = TRUE}
+
+# Sources
+# https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html
+# https://www.statology.org/create-table-in-r/
+
+library(kableExtra) # Load library to create embedded table
+
+# Create a data frame for required metrics
+holdTable <- data.frame(Model=c("Logistic Regression", "LDA", "QDA", "KNN", "Penalized Log. Reg.", "Random Forest", "SVM - Radial"),Tuning =c("NA", "NA", "NA", 10, round(optimal.lambda,4), round(sqrt(3),4), "Cost - 100; Gamma - 4"), AUROC = c(log.hold.auc, lda.hold.auc, qda.hold.auc, knn.hold.auc, ridge.hold.auc, rf.hold.auc, svm.radial.hold.auc), Threshold = c(.14,.09,.1,.59,.01,.45, .25), Accuracy = c(log.hold.accuracy, lda.hold.accuracy, qda.hold.accuracy, knn.hold.accuracy, ridge.hold.accuracy,rf.hold.accuracy, svm.radial.hold.accuracy), TPR = c(log.hold.tpr, lda.hold.tpr, qda.hold.tpr, knn.hold.tpr, ridge.hold.tpr, rf.hold.tpr, svm.radial.hold.tpr), FPR = c(log.hold.fpr, lda.hold.fpr, qda.hold.fpr, knn.hold.fpr, ridge.hold.fpr, rf.hold.fpr, svm.radial.hold.fpr), Precision = c(log.hold.precision, lda.hold.precision, qda.hold.precision, knn.hold.precision, ridge.hold.precision, rf.hold.precision, svm.radial.hold.precision))
+
+holdTable # See the data frame created
+
+# Creates embedded table into R Studio
+holdTable %>%
+  kbl(digits = 4) %>%
+  kable_material_dark()
+
+```
+
+# Conclusions
+
+## Conclusion 1
+
+For the cross-validation data, the best performing algorithms were KNN, Random Forest, and SVM - Radial. From the AUC and Accuracy values, we get values of over 99% for each of these 3 models. For all metrics, we see consistently strong scores and, comparatively, the 3 models have similar scores for each metric (for the most part). Another characteristic of these 3 models is that their precision metric is substantially better (over 95%) than any of the remaining models (the next best model related to precision is logistic regression at 81%). A benefit of these 3 models is that methods were deployed to find the optimal tuning parameter values to get us the best results for each of these models - these results seem to indicate that we chose optimal values for these tuning parameters. Between these 3 models,they also all score over a 90% for TPR (KNN and Random Forest score over 95%) and FPRs less than 1%. This tells us that these models were very good at predicting correctly the observations that are blue tarps in the cross-validation data. Another thing to note is that logistic regression also seems to perform relatively well though has a significantly lower precision score than KNN, Random Forest, and SVM - Radial.
+
+For our cross-validation data, it was relatively simple to identify the best performing algorithms because they consistently performed well on each metric and compared to other models. For the holdout data, determining the best performing algorithms was a bit trickier because the models performed well for some metrics and performed poorly in other metrics (note that all the models performed poorly in terms of precision which causes problems when having to consider our resource allocation constraint). If we did not have to consider resource constraints, we might want to go with either either logistic regression or ridge regression solely for the fact that they do incredibly well on their TPR (they identify most, if not all, the observations that are blue tarps). We might also consider LDA because the TPR rate is over 90%. Unfortunately, in a real-world scenario, resource constraints, like financial and labor assets, are limited. Keeping this balance in mind, KNN or Random Forest may be better suited for our objectives because, even though they have lower TPR rates, the TPR rates are still relatively high (~80%) and these models perform much better in regards to their FPR (less than 1%) and precision (~50%). If our scenario had some resources that they could expend, there could be a possibility of exploring logistic regression or LDA. We probably would not want to consider ridge regression because, although it has a 100% TPR, it performs significantly poorly on the other metrics. Overall, keeping in mind resource constraints, KNN and Random Forest are the best models based off their performance on the holdout data and given our limitations on what we could do in a real-world situation.
+
+## Conclusion 2
+
+Based on the analysis stated in Conclusion 1, we see that the best performing algorithms (keeping in mind resource constraints) concluded with the same results (with some caveats). From our analysis, KNN and Random Forest perform extremely well on the cross-validation data and performed well enough on the holdout data. We saw that SVM - Radial performed well on the cross-validation set but performed significantly poorer when looking at TPR and Precision. We also saw that logistic regression performed pretty well on both the cross-validation and holdout data sets - the problem with logistic regression is that its precision score on both data sets were lower than other models. This indicates that the model predicts more observations as blue tarps when they are not. This would be fine if we did not have to keep in mind the resource constraint identified in the introduction of this project. The logistic regression would be a great model to use if we had the ability to use as many resources as possible but we know that in a real-world scenario that there are restrictions to this.
+
+I think that the consistent results between the cross-validation performance table and the holdout performance table can be seen in the fact that the cross-validation process was effective in detailing the performance of the models albeit on a lower number of observations. From the cross-validation process, we were able to see, at a high-level, which models were effective on the data set and then use the holdout set to verify this and scale down the metrics to see the models true effectiveness. Additionally, since we use the same thresholds and tuning parameters from the cross-validation set, this seems to ensure that we will get similar results (not necessarily on metric values but how well each model performed compared to other models).
+
+It is also important to note that even though the best performing models between the cross-validation and holdout data are similar, the metrics calculated were not similar. We saw that, for many metrics, the performance of some of the models went significantly down. For example, many of the models had TPR rates in the high 90s while, in the holdout data, that has dipped. We also see that the major difference between the two tables is that the precision of each model have performed terribly. We can understand that this difference comes mainly from the number of observations that were used to test and train in the cross-validation process compared to the holdout data set (see Conclusion 6 for further discussion).
+
+## Conclusion 3
+
+My recommendation for the algorithm to use to detect blue tarps is the KNN model. We saw from the cross-validation data set that KNN had very high performance on each metric and was able to identify 95% of the observations that were blue tarps while avoiding predicting too many observations as blue tarps when they were not blue tarps. The main reason, though, that KNN was selected as the optimal model was based on what we saw from the holdout data set. The KNN model performed fairly well but not as well as some of the other models like logistic regression and LDA when it came to TPR. Unfortunately, we see that both of these models suffer from very low precision rates at the expense of these high TPR values and have an FPR rate that is higher (KNN FPR is less than 1%). Also, since we need to identify blue tarps within a resource constraint, the low values for precision seen from Logistic Regression and LDA on the holdout data set showed that using these models would lead to using resources incorrectly and identifying observations that are not actually blue tarps. Looking at the KNN model, though, we see that it has the highest precision score and has a TPR of ~81%, which isn't the highest of all the models but overall still a pretty solid score when considering an assumed resource constraint. Because of these assumptions and constraints, I believe KNN is the best model to meet our objectives. 
+
+If we didn't worry about resources at all, I would most likely recommend the logistic regression model because it is able to identify almost all the observations that are blue tarps. This would undoubtedly lead us to incorrectly identify other observations as blue tarps when they are not but we would still predict correctly the blue tarps that are blue tarps. A scenario where resources are unlimited or not a factor would undoubtedly require me to go with the logistic regression.
+
+Some people, when looking at the results, may have selected Random Forest as the appropriate choice because it performed similarly to KNN in the cross-validation and holdout data sets. My rationale for selecting KNN over Random Forest was the fact that, in the holdout data set, we see that KNN performs slightly better in TPR and Precision which were the two metrics that I was most concerned about. Random Forest does have a higher AUC score but not enough to warrant selecting it over KNN. 
+
+## Conclusion 4
+
+In the context of this project, we saw that the values gathered from each model's confusion matrix (which contain the TP, FP, TN, and FN) were able to calculate the various metric that were consolidated into the performance tables. The basis of this analysis was to identify the model that would correctly observe the most blue tarps while also keeping in mind the real-world context of this project. The metrics that I was closely observing were the TPR, Precision, and FPR because these values seemed to be the metrics that varied and were impactful to our objective. The TPR was useful in detailing how many of the observations that were blue tarps were correctly identified as blue tarps. This metric helped to answer the m main question of how many blue tarps were correctly identified. As mentioned previously, a resource constraint was considered in these conclusions and final analysis. 
+
+The FPR and Precision metrics were helpful in explaining how off these models predictions were in context and helping to account for how badly resources could potentially be wasted. We know that in a real-world situation that we want to be timely in finding these blue tarps which means that our models need to be effective at predicting what is and is not a blue tarp so the resources can be used on the blue tarp observations. We wanted to avoid resources being used on something that was predicted as a blue tarp but was in reality not a blue tarp (or miss an observation that was a blue tarp but was predicted as something else). The FPR helped to describe how badly our model predicted an observation as a blue tarp when it was not (i.e. sending resources to a location that did not have blue tarps) which is something we wanted to minimize. The KNN model had less than a 1% rate for FPR which was a reason I selected it as the best model for our objectives. The precision also detailed how well the model was able to identify blue tarps out of all the possible blue tarp observations.
+
+The AUC value helped to show how well our model classified the observations and all the models did pretty well in this aspect (which can be seen in how well the ROC curves hug the top left corner of the plot). The accuracy of each model described how well the model correctly classified an observation (whether it was or was not a blue tarp) out of all the observations. A low accuracy identified a model that would incorrectly predict an observation in general - for the most part, all the models faired well in this aspect except the ridge regression model.
+
+The threshold metric was important in order to calibrate our model to identify the most blue tarps correctly as possible. As described in the Threshold Selection section, the thresholds of each model were determined based on how much additional improvement that a change in the threshold would give (in this case, how much would a lower threshold be beneficial to improve the model prediction). We wanted to reduce the threshold because this would reduce the number of false negatives (i.e. the observations that were predicted as not a blue tarp but were) but in a way that there was a substantially improvement in the TPR. In our situation, this was important because we wanted to reduce the chance that we would pass over an observation that was a blue tarp but we classified as not a blue tarp. We also had to keep in mind that reducing the threshold increased the likelihood of an increase in false positives. This is why in the Threshold Justification section we only placed the threshold value to something that actually showed substantial improvement (i.e. assumed every 5% was a "substantial improvement"). For the tuning parameter, the methods used to identify the tuning parameter helped to develop the optimal model for KNN, Ridge Regression, Random Forest, and SVM. Cross-validation was useful in helping to determine some of these tuning parameters.
+
+## Conclusion 5
+
+For future analysis into this project, I think that more information on the resources available would be useful as a tool to better determine the model that is most suitable for this problem statement. From the problem statement, it was understood that we wanted to identify as many blue tarps as possible in a timely manner which meant we didn't want to use our resources loosely. This is how models like logistic regression were not selected as the most optimal model for this problem because, even though they were effective at identifying what was a blue tarp, it did this at the expense of identifying other observations falsely. A look into the labor provided and the finances given to this rescue effort would give us the kind of context needed to determine, more accurately, the optimal model. This also goes back to the selection of the thresholds - they were determined based on an assumption in regards to the marginal benefit of decreasing the threshold at the expense of using resources on a mis-predicted observation (i.e. was there enough marginal benefit to justify decreasing the threshold). We would better be able to determine a tuning parameter if we knew how restrictive (or flexible) the resource constraints were. It is understood that in a real-world scenario that the the best performing model selected is exactly because we do not have the resources to check every location and therefore need to determine a model that will predict the most blue tarps correctly with minimal resource expenditure/wastefulness. 
+
+Additionally, when looking at the holdout data, the main thing stopping me from saying that these models would be useful in a real-world scenario are the very low precision values (at least compared to what we saw in cross-validation). This leads me to believe that implementation of any of these models would lead to some level of wastefulness of resources to examine locations that don't have blue tarps or miss areas that do have blue tarps. In a real-world scenario, we see that KNN is probably the most effective model keeping in mind the constraints that we had. In a perfect world, logistic regression would probably be the best to use because it performs so well in most metrics except precision. This would be something I'd like to look further into - why these models seemed to perform so well, in terms of precision, on the cross-validation and then had a significant drop in the holdout data set. I would want to do some further analysis into methods that may help us resolve the low precision values (without too much drop in the other metrics). 
+
+Another thing that I would want to look further into is into the results of our ridge regression model. From my analysis, I was able to manipulate the threshold value to get us perfect TPR but using another threshold value (in Part 1 analysis), I was able to get 0% FPR and 100% precision. Changes in the threshold value of the ridge regression model seemed to have the highest impact on determining the results. It also seemed that, in the other metrics, that ridge regression performed the worst out of all the models (even with 100% TPR). I would be interested in understanding if there are workarounds to improve the performance of ridge regression while maintaining its high TPR. Also, I think that looking into lasso regression and seeing if that provided any improvement would be interesting too.
+
+## Conclusion 6
+
+My analysis of these models on the data set also further demonstrated how impactful more observations in an analysis are to get accurate results. Between the cross-validation and holdout data, we saw substantially deviations between the two performance tables on many metrics. From our cross-validation process in Part 1, we dealt with over 60,000 observations where only a tenth of that data was used as test data at a time. From these results, though, we saw that a lot of our models performed strongly and that there were were clear winners in terms of the best performing algorithm. On top of that, using cross-validation, we were not able to use the full training data because a tenth of it had to be used as test data each round and averaged between the 10 folds. 
+
+In Part 2, we dealt with a test data set of over 2 million observations, compared to only using a little over 6000 in each fold during cross-validation, and saw how that significantly changed the performance of each model. As mentioned earlier, it was difficult to determine a clear winner from the holdout data set because of the fluctuations in metrics while the cross-validation results were consistent. I think that, performance wise, we were able to see which models specifically would perform well but understanding the metrics and how impactful these models would be were severely inflated in the cross-validation performance table. If we had used the holdout data set as our cross-validation set and vice versa, we probably would have seen similar results between the two performance tables. 
+
+In reality, we may face situations in which we have to deal with a limited data set and make our predictions based on these with the caveat that we are only dealing with a limited number of observations. We have to be careful in our approach with this type of data set - it could have been very easy to look at the cross-validation results and proceed with one of the models based off that. This could have bad ramifications if incorporated because the models had not been tested against a lot of observations.
+
+
+
+
